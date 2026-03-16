@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>PID制御体験ゲーム</title>
+
+<!-- MathJax: 伝達関数の数式表示 -->
+<script>
+window.MathJax = { tex: { inlineMath: [['\\(','\\)'], ['$', '$']] } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+<style>
+  :root{
+    --bgR:#f4f4f4;
+    --line:#ccc;
+    --btn:#eee;
+    --btnBorder:#999;
+    --btnActive:#4CAF50;
+    --txt:#111;
+  }
+
+ body{
+  margin:0;
+  font-family:Arial, sans-serif;
+  display:flex;
+  height:100vh;          /* ビューポートを使い切る */
+  overflow:hidden;        /* 余白スクロールを出さない */
+  color:var(--txt);
+  }
+
+  #left{
+    flex: 1 1 0;
+    padding:8px;
+    box-sizing:border-box;
+    display:flex;           /* canvasを伸ばす */
+    min-width:0;            /* flexはみ出し対策 */
+  }
+
+  #right{
+    flex: 0 0 360px;        /* 右は読みやすい幅を確保 */
+    max-width: 45vw;        /* 画面が狭いときは比率で縮む */
+    min-width: 280px;
+    padding:8px;
+    box-sizing:border-box;
+    background:var(--bgR);
+    border-left:1px solid var(--line);
+    overflow:auto;
+  }
+
+  /* スマホ横など狭いときも「左右で埋める」 */
+  @media (max-width: 900px){
+    #right{ flex-basis: 320px; min-width: 240px; }
+  }
+
+  /* canvasを親要素いっぱいに */
+    canvas{ background:#fff; border:1px solid var(--line); display:block; }
+  #graph{ flex:1; width:100%; height:100%; }
+
+  /* 参照波形プレビューは固定サイズ（勝手に伸びないように） */
+  #refPreview{
+    width:320px;
+    height:140px;
+    max-width:100%;
+  }
+
+  h3{ margin:12px 0 6px; }
+  h4{ margin:8px 0 6px; font-size:14px; }
+  .button-group{ display:flex; gap:6px; margin-bottom:8px; }
+  .button-group button{
+    flex:1; padding:7px 6px; border:1px solid var(--btnBorder);
+    background:var(--btn); cursor:pointer; border-radius:6px;
+  }
+  .button-group button.active{
+    background:var(--btnActive); color:#fff; font-weight:bold; border-color:#2e7d32;
+  }
+  /* 参照入力：波形付きボタン */
+.ref-grid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:8px;
+  margin-bottom:10px;
+}
+.ref-btn{
+  border:1px solid var(--btnBorder);
+  background:#fff;
+  border-radius:10px;
+  padding:8px;
+  cursor:pointer;
+  text-align:left;
+}
+.ref-btn.active{
+  border-color:#2e7d32;
+  box-shadow: 0 0 0 2px rgba(76,175,80,0.25) inset;
+}
+.ref-title{
+  font-size:13px;
+  font-weight:bold;
+  margin-bottom:6px;
+}
+.ref-mini{
+  width:100%;
+  height:48px; /* CSS上は固定表示 */
+  display:block;
+  border:1px solid var(--line);
+  border-radius:6px;
+  background:#fff;
+}
+  label{ display:block; margin-top:8px; font-size:13px; }
+  input, select{
+    width:100%; box-sizing:border-box; padding:6px 8px;
+    border:1px solid var(--line); border-radius:6px; background:#fff;
+  }
+  .row{ display:flex; gap:8px; }
+  .row > div{ flex:1; }
+  .mathbox{
+    background:#fff; border:1px solid var(--line); border-radius:8px;
+    padding:8px; margin-top:6px; font-size:14px;
+  }
+  .smallnote{ font-size:12px; color:#444; margin-top:4px; }
+
+  .gain-line{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap; /* 画面が狭い時は折り返す */
+}
+.gain-line span{
+  font-size:13px;
+}
+.gain-line input{
+  width:70px;   /* 好みで調整 */
+  padding:6px 8px;
+}
+
+.plant-grid{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap:8px;
+  margin-top:6px;
+}
+.plant-btn{
+  border:1px solid var(--btnBorder);
+  background:#fff;
+  border-radius:10px;
+  padding:10px;
+  text-align:left;
+  cursor:pointer;
+}
+.plant-btn.active{
+  border-color:#2e7d32;
+  box-shadow: 0 0 0 2px rgba(76,175,80,0.25) inset;
+}
+.plant-name{
+  font-weight:bold;
+  margin-bottom:6px;
+}
+.plant-tf{
+  font-size:14px;
+}
+</style>
+</head>
+
+<body>
+  <div id="left">
+    <canvas id="graph"></canvas>
+  </div>
+
+  <div id="right">
+    <h3>参照入力 r(t)</h3>
+    <div class="ref-grid" id="refButtons">
+  <button class="ref-btn active" data-value="step">
+    <div class="ref-title">ステップ</div>
+    <canvas class="ref-mini" data-wave="step" width="120" height="45"></canvas>
+  </button>
+
+  <button class="ref-btn" data-value="sine">
+    <div class="ref-title">正弦波</div>
+    <canvas class="ref-mini" data-wave="sine" width="120" height="45"></canvas>
+  </button>
+
+  <button class="ref-btn" data-value="square">
+    <div class="ref-title">矩形波</div>
+    <canvas class="ref-mini" data-wave="square" width="120" height="45"></canvas>
+  </button>
+
+  <button class="ref-btn" data-value="trapezoid">
+    <div class="ref-title">台形波</div>
+    <canvas class="ref-mini" data-wave="trapezoid" width="120" height="45"></canvas>
+  </button>
+</div>
+    <h3>制御器</h3>
+    <div class="button-group" id="controllerButtons">
+      <button data-value="P" class="active">P</button>
+      <button data-value="PD">PD</button>
+      <button data-value="PI">PI</button>
+      <button data-value="PID">PID</button>
+    </div>
+
+    <h3>PIDゲイン</h3>
+
+<div class="gain-line">
+  <span>Kp:</span><input type="number" id="kp" value="2.0" step="0.1" />
+  <span>Ki:</span><input type="number" id="ki" value="0.5" step="0.1" />
+  <span>Kd:</span><input type="number" id="kd" value="0.2" step="0.1" />
+</div>
+
+    <h3>制御対象 G(s)</h3>
+
+<div class="plant-grid" id="plantButtons">
+  <button class="plant-btn active" data-value="first">
+    <div class="plant-name">一次遅れ系</div>
+    <div class="plant-tf">\( G(s)=\frac{1}{s+1} \)</div>
+  </button>
+
+  <button class="plant-btn" data-value="second">
+    <div class="plant-name">二次遅れ系</div>
+    <div class="plant-tf">\( G(s)=\frac{1}{s^2+0.5s+1} \)</div>
+  </button>
+
+  <button class="plant-btn" data-value="delay">
+    <div class="plant-name">一次遅れ＋むだ時間</div>
+    <div class="plant-tf">\( G(s)=\frac{e^{-Ls}}{s+1} \)</div>
+  </button>
+</div>
+
+<div class="smallnote">
+  ※ むだ時間は固定で L = <span id="delayValueText">0.40</span> [s]
+</div>
+
+    <h3>伝達関数（全て伝達関数表現）</h3>
+    <div class="mathbox" id="controllerTF"></div>
+    <div class="mathbox" id="plantTF"></div>
+    <div class="mathbox" id="closedTF"></div>
+    
+    <div id="poleDisplay"></div>
+
+  </div>
+
+<script>
+/* =============================
+   基本設定
+============================= */
+const canvas = document.getElementById("graph");
+const ctx = canvas.getContext("2d");
+
+
+
+const el = {
+  kp: document.getElementById("kp"),
+  ki: document.getElementById("ki"),
+  kd: document.getElementById("kd"),
+  plantType: document.getElementById("plantType"),
+  delayValueText: document.getElementById("delayValueText"),
+  controllerTF: document.getElementById("controllerTF"),
+  plantTF: document.getElementById("plantTF"),
+  closedTF: document.getElementById("closedTF"),
+};
+
+let refType = "step";
+let controllerType = "P";
+let plantType = "first";   // ★追加（初期値）
+
+const dt = 0.01;
+const simTime = 5.0;         // 横軸 0-5
+const yMin = -1.5, yMax = 1.5; // 縦軸
+const tol = 0.05;            // 許容帯（r±tol）
+
+const L = 0.40;              // むだ時間 [s]
+el.delayValueText.textContent = L.toFixed(2);
+
+/* =============================
+   UI（ボタン式）
+============================= */
+function setupButtons(groupId, setter){
+  const g = document.getElementById(groupId);
+  g.querySelectorAll("button").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      g.querySelectorAll("button").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      setter(btn.dataset.value);
+      updateAll();
+    });
+  });
+}
+
+setupButtons("refButtons", v => refType = v);
+setupButtons("controllerButtons", v => controllerType = v);
+setupButtons("plantButtons", v => plantType = v);
+
+document.querySelectorAll("input, select").forEach(x=>{
+  x.addEventListener("input", updateAll);
+});
+
+/* =============================
+   参照入力 r(t)
+============================= */
+function reference(t){
+  if(refType==="step"){
+    return (t > 0.5) ? 1 : 0;
+  }
+  if(refType==="sine"){
+    // 1 Hz
+    const A = 1.0;   // 振幅
+    const f = 0.4;   // 周波数[Hz]（周期5秒）
+    return A * Math.sin(2*Math.PI*f*t);
+  }
+  if(refType==="square"){
+    const A = 1.0;
+    const f = 0.4;
+    return A * Math.sign(Math.sin(2*Math.PI*f*t));
+  }
+  if(refType==="trapezoid"){
+    // 周期2秒：0→1（0.5s）保持（0.5s）→0（0.5s）保持（0.5s）
+    const tau = t % 2.0;
+    if(tau < 0.5) return 2*tau;        // 0->1
+    if(tau < 1.0) return 1;            // hold
+    if(tau < 1.5) return 3 - 2*tau;    // 1->0
+    return 0;                          // hold
+  }
+  return 0;
+}
+
+/* =============================
+   参照波形プレビュー
+============================= */
+function drawReferencePreview(){
+  pvctx.clearRect(0,0,pv.width,pv.height);
+
+  const w = pv.width, h = pv.height;
+  const tMax = 2.0; // プレビュー表示範囲
+  // プレビュー用スケール（だいたい見やすく）
+  const pMin = -1.2, pMax = 1.2;
+
+  const sx = t => (t/tMax)*w;
+  const sy = y => h - (y - pMin)/(pMax - pMin)*h;
+
+  // 軸
+  pvctx.strokeStyle = "#000";
+  pvctx.lineWidth = 2;
+  pvctx.beginPath();
+  pvctx.moveTo(0, sy(0));
+  pvctx.lineTo(w, sy(0));
+  pvctx.stroke();
+
+  // 波形
+  pvctx.strokeStyle = "blue";
+  pvctx.lineWidth = 2;
+  pvctx.beginPath();
+  for(let t=0; t<=tMax+1e-9; t+=0.01){
+    const y = reference(t);
+    const x = sx(t);
+    const yy = sy(y);
+    if(t===0) pvctx.moveTo(x,yy);
+    else pvctx.lineTo(x,yy);
+  }
+  pvctx.stroke();
+}
+
+/* =============================
+   制御器（時間領域の計算）
+============================= */
+function controllerOutput(e, ePrev, integ){
+  const kp = parseFloat(el.kp.value);
+  const ki = parseFloat(el.ki.value);
+  const kd = parseFloat(el.kd.value);
+  const de = (e - ePrev)/dt;
+
+  if(controllerType==="P")   return kp*e;
+  if(controllerType==="PD")  return kp*e + kd*de;
+  if(controllerType==="PI")  return kp*e + ki*integ;
+  if(controllerType==="PID") return kp*e + ki*integ + kd*de;
+  return 0;
+}
+
+/* =============================
+   プラント（時間領域の計算）
+============================= */
+function simulate(){
+  const plant = plantType;
+  const kp = parseFloat(el.kp.value);
+
+  let y = 0;
+  let ydot = 0;       // 二次用
+  let integ = 0;
+  let ePrev = 0;
+
+  // むだ時間用バッファ
+  const delaySteps = Math.max(0, Math.round(L/dt));
+  const buf = new Array(delaySteps).fill(0);
+
+  const data = [];
+  for(let t=0; t<=simTime+1e-9; t+=dt){
+    const r = reference(t);
+    const e = r - y;
+    integ += e*dt;
+
+    let u = controllerOutput(e, ePrev, integ);
+    ePrev = e;
+
+    if(plant==="first"){
+      // y' = -y + u  （G(s)=1/(s+1)）
+      y += dt*(-y + u);
+    }else if(plant==="second"){
+      // y'' + 0.5 y' + y = u  （G(s)=1/(s^2+0.5s+1)）
+      ydot += dt*(-0.5*ydot - y + u);
+      y += dt*ydot;
+    }else if(plant==="delay"){
+      // uにむだ時間を入れて一次遅れに投入
+      buf.push(u);
+      const uDel = buf.shift() ?? 0;
+      y += dt*(-y + uDel);
+    }
+
+    // 表示レンジのため軽くクリップ（暴走時の描画を見やすく）
+    if(y >  5) y =  5;
+    if(y < -5) y = -5;
+
+    data.push({t, r, y});
+  }
+  computePoles();
+  return data;
+}
+
+/* =============================
+   描画（左：グラフ）
+   - r(t), y(t)
+   - 許容帯（r±tol）ハイライト
+   - 軸目盛り
+============================= */
+function drawGraph(data){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  const w = canvas.getBoundingClientRect().width;
+  const h = canvas.getBoundingClientRect().height;
+
+  const sx = t => marginL + (t/simTime)*(w - marginL);
+  const sy = y => (h - marginB) - (y - yMin)/(yMax - yMin)*(h - marginB);
+
+  const tickLenX = 18;  // x軸の目盛り線の半分の長さ（上下に出す）
+  const tickLenY = 18;  // y軸の目盛り線の長さ（右に出す）
+
+  const marginL = 70;  // 左余白（y軸ラベル用）
+  const marginB = 60;  // 下余白（x軸ラベル用：必要なら）
+
+  // 背景：許容帯（r±tol）を区間ごとに塗る
+  // ここは簡易的にサンプル点ごとに縦帯で塗ります
+  ctx.fillStyle = "rgba(0, 200, 0, 0.10)";
+  for(let i=0; i<data.length-1; i++){
+    const d = data[i];
+    const x0 = sx(d.t);
+    const x1 = sx(data[i+1].t);
+    const yTop = sy(d.r + tol);
+    const yBot = sy(d.r - tol);
+    const yA = Math.min(yTop, yBot);
+    const yB = Math.max(yTop, yBot);
+    ctx.fillRect(x0, yA, Math.max(1, x1-x0), yB-yA);
+  }
+
+  // 軸
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  // x軸（y=0）
+  ctx.moveTo(0, sy(0));
+  ctx.lineTo(w, sy(0));
+  // y軸（x=0）
+  ctx.moveTo(marginL, 0);
+  ctx.lineTo(marginL, h - marginB);
+  ctx.stroke();
+
+  // 目盛り（x: 0..5, y: -1.5..1.5 step 0.5）
+  ctx.fillStyle = "#000";
+  ctx.font = "28px Arial";
+  for(let i=0; i<=5; i++){
+    const x = sx(i);
+    const label = String(i);
+  if(i === 5){
+    // 右端で切れないように右寄せ
+    ctx.textAlign = "right";
+    ctx.fillText(label, x - 4, h - 430);
+    ctx.textAlign = "left";
+  }else{
+    ctx.fillText(label, x + 2, h - 430);
+  }
+    ctx.beginPath();
+    ctx.moveTo(x, sy(0) - tickLenX);
+    ctx.lineTo(x, sy(0) + tickLenX);
+    ctx.stroke();
+  }
+  // x軸ラベル（右端）
+    ctx.textAlign = "right";
+    ctx.fillText("t", w - 6, h-520);   // 例: "t [s]" にしてもOK
+    ctx.textAlign = "left";
+  for(let y = -1.5; y<=1.5001; y+=0.5){
+    const yy = sy(y);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(y.toFixed(1), marginL - 8, yy); // y軸の左に表示
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.beginPath();
+    ctx.moveTo(marginL, yy);
+    ctx.lineTo(marginL + tickLenY, yy);
+    ctx.stroke();
+  }
+
+  // r(t)
+  ctx.strokeStyle = "blue";
+  ctx.lineWidth = 10;
+  ctx.setLineDash([14, 10]); // ★破線（[線の長さ, 間隔]）
+  ctx.beginPath();
+  data.forEach((d,i)=>{
+    const x = sx(d.t), y = sy(d.r);
+    if(i===0) ctx.moveTo(x,y);
+    else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.setLineDash([]); // ★以降の線（y(t)など）を実線に戻す
+
+  // y(t)
+  ctx.strokeStyle = "red";
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  data.forEach((d,i)=>{
+    const x = sx(d.t), y = sy(d.y);
+    if(i===0) ctx.moveTo(x,y);
+    else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  // 凡例
+  ctx.font = "28px 'Cambria Math','STIX Two Math','Times New Roman',serif";
+  ctx.fillStyle = "blue";
+  ctx.fillText("𝑟(𝑡)", 10 + 100, 30);
+  ctx.fillStyle = "red";
+  ctx.fillText("𝑦(𝑡)", 70 + 100, 30);
+  ctx.fillStyle = "rgba(0, 200, 0, 0.6)";
+  ctx.fillText("許容帯", 130 + 100, 30);
+}
+
+/* =============================
+   伝達関数（C(s), G(s), T(s)）表示
+   - すべて伝達関数で表現
+============================= */
+function updateTransferFunctions(){
+  const kp = parseFloat(el.kp.value);
+  const ki = parseFloat(el.ki.value);
+  const kd = parseFloat(el.kd.value);
+  const plant = plantType;
+
+  // C(s)
+  // PI,PIDは「有理式」で表示（見た目が教科書的）
+  let Cs = "";
+  if(controllerType==="P"){
+    Cs = `C(s)=K_p \\; (= ${kp})`;
+  }else if(controllerType==="PD"){
+    Cs = `C(s)=K_p + K_d s \\; (= ${kp} + ${kd}s)`;
+  }else if(controllerType==="PI"){
+    Cs = `C(s)=K_p + \\frac{K_i}{s} = \\frac{K_p s + K_i}{s} \\; (= \\frac{${kp}s+${ki}}{s})`;
+  }else if(controllerType==="PID"){
+    Cs = `C(s)=K_p + K_d s + \\frac{K_i}{s} = \\frac{K_d s^2 + K_p s + K_i}{s} \\; (= \\frac{${kd}s^2+${kp}s+${ki}}{s})`;
+  }
+
+  // G(s)
+  let Gs = "";
+  if(plant==="first"){
+    Gs = `G(s)=\\frac{1}{s+1}`;
+  }else if(plant==="second"){
+    Gs = `G(s)=\\frac{1}{s^2+0.5s+1}`;
+  }else if(plant==="delay"){
+    Gs = `G(s)=\\frac{e^{-Ls}}{s+1},\\; L=${L.toFixed(2)}\\;\\mathrm{s}`;
+  }
+
+  // 閉ループ（ユニティフィードバック）
+  const Ts = `T(s)=\\frac{C(s)G(s)}{1+C(s)G(s)}`;
+
+  el.controllerTF.innerHTML = `\\(${Cs}\\)`;
+  el.plantTF.innerHTML = `\\(${Gs}\\)`;
+  el.closedTF.innerHTML = `\\(${Ts}\\)`;
+
+  // MathJax 再描画
+  if(window.MathJax && MathJax.typesetPromise){
+    MathJax.typesetPromise();
+  }
+}
+
+/* ========= 多項式ユーティリティ ========= */
+function polyConv(a, b){
+  const r = new Array(a.length + b.length - 1).fill(0);
+  for(let i=0;i<a.length;i++){
+    for(let j=0;j<b.length;j++){
+      r[i+j] += a[i]*b[j];
+    }
+  }
+  return r;
+}
+function polyAdd(a, b){
+  const n = Math.max(a.length, b.length);
+  const aa = new Array(n).fill(0);
+  const bb = new Array(n).fill(0);
+  // 先頭合わせ（次数の高い側を揃える）
+  for(let i=0;i<a.length;i++) aa[n-a.length+i] = a[i];
+  for(let i=0;i<b.length;i++) bb[n-b.length+i] = b[i];
+  return aa.map((v,i)=>v+bb[i]);
+}
+function polyScale(a, k){ return a.map(v=>v*k); }
+
+/* ========= 複素数（最小限） ========= */
+function cAdd(x,y){ return {re:x.re+y.re, im:x.im+y.im}; }
+function cSub(x,y){ return {re:x.re-y.re, im:x.im-y.im}; }
+function cMul(x,y){ return {re:x.re*y.re - x.im*y.im, im:x.re*y.im + x.im*y.re}; }
+function cDiv(x,y){
+  const d = y.re*y.re + y.im*y.im;
+  return {re:(x.re*y.re + x.im*y.im)/d, im:(x.im*y.re - x.re*y.im)/d};
+}
+function cAbs(x){ return Math.hypot(x.re, x.im); }
+
+/* 多項式 p(s) を複素数 s で評価（p は降順係数） */
+function polyEvalComplex(p, s){
+  let acc = {re:0, im:0};
+  for(let i=0;i<p.length;i++){
+    acc = cAdd(cMul(acc, s), {re:p[i], im:0});
+  }
+  return acc;
+}
+
+/* ========= Durand–Kerner 法で根を求める（次数<=3程度なら十分安定） ========= */
+function polyRootsDurandKerner(p){
+  // 先頭を1に正規化
+  const a0 = p[0];
+  const q = p.map(v=>v/a0);
+
+  const n = q.length - 1; // 次数
+  if(n <= 0) return [];
+  if(n === 1){
+    // q[0] s + q[1] = 0
+    return [{re:-q[1]/q[0], im:0}];
+  }
+
+  // 初期値：単位円上にばらす（適当にスケール）
+  const roots = [];
+  const R = 0.7; // 初期半径（小さめでOK）
+  for(let k=0;k<n;k++){
+    const th = 2*Math.PI*k/n;
+    roots.push({re:R*Math.cos(th), im:R*Math.sin(th)});
+  }
+
+  const maxIter = 80;
+  const eps = 1e-10;
+
+  for(let it=0; it<maxIter; it++){
+    let maxMove = 0;
+    for(let i=0;i<n;i++){
+      const xi = roots[i];
+      let denom = {re:1, im:0};
+      for(let j=0;j<n;j++){
+        if(i===j) continue;
+        denom = cMul(denom, cSub(xi, roots[j]));
+      }
+      const fxi = polyEvalComplex(q, xi);
+      const delta = cDiv(fxi, denom);
+      const xnew = cSub(xi, delta);
+      const move = cAbs(cSub(xnew, xi));
+      if(move > maxMove) maxMove = move;
+      roots[i] = xnew;
+    }
+    if(maxMove < eps) break;
+  }
+  return roots;
+}
+
+/* ========= G(s), C(s) を「分子・分母の多項式」で返す ========= */
+function getPlantTFPoly(plant){
+  if(plant === "first"){
+    // 1/(s+1)
+    return {num:[1], den:[1,1]};
+  }
+  if(plant === "second"){
+    // 1/(s^2+0.5s+1)
+    return {num:[1], den:[1,0.5,1]};
+  }
+  if(plant === "delay"){
+    // e^{-Ls}/(s+1) を 1次Padé: (1 - Ls/2)/(1 + Ls/2) * 1/(s+1)
+    const numP = [-(L/2), 1];   // -(L/2)s + 1
+    const denP = [ (L/2), 1];   //  (L/2)s + 1
+    return {num: numP, den: polyConv(denP, [1,1])};
+  }
+  return {num:[1], den:[1,1]};
+}
+
+function getControllerTFPoly(ctrl, kp, ki, kd){
+  if(ctrl === "P"){
+    return {num:[kp], den:[1]};
+  }
+  if(ctrl === "PD"){
+    // Kd s + Kp
+    return {num:[kd, kp], den:[1]};
+  }
+  if(ctrl === "PI"){
+    // (Kp s + Ki)/s
+    return {num:[kp, ki], den:[1, 0]};
+  }
+  if(ctrl === "PID"){
+    // (Kd s^2 + Kp s + Ki)/s
+    return {num:[kd, kp, ki], den:[1, 0]};
+  }
+  return {num:[kp], den:[1]};
+}
+
+/* ========= ここが本体：全対応の極計算 ========= */
+function computePoles(){
+  const kp = parseFloat(el.kp.value);
+  const ki = parseFloat(el.ki.value);
+  const kd = parseFloat(el.kd.value);
+
+  const plant = plantType;        // ← あなたのグローバル変数
+  const ctrl  = controllerType;   // ← あなたのグローバル変数
+
+  const G = getPlantTFPoly(plant);
+  const C = getControllerTFPoly(ctrl, kp, ki, kd);
+
+  // 特性方程式: 1 + C(s)G(s)=0
+  // C = Nc/Dc, G = Ng/Dg
+  // => Dc*Dg + Nc*Ng = 0
+  const DcDg = polyConv(C.den, G.den);
+  const NcNg = polyConv(C.num, G.num);
+  let charPoly = polyAdd(DcDg, NcNg);
+
+  // 先頭がほぼ0のときの保険（あり得る）
+  while(charPoly.length > 1 && Math.abs(charPoly[0]) < 1e-12) charPoly.shift();
+
+  // 根を計算
+  const roots = polyRootsDurandKerner(charPoly);
+
+  // 表示整形
+  if(plant === "delay"){
+    // 近似であることを明記（Padé 1次）
+    // ※近似を嫌ならこの注記を消してOK
+  }
+
+  const parts = roots
+    .sort((a,b)=>a.re-b.re) // 見やすく並び替え
+    .map((z,idx)=>{
+      const re = (Math.abs(z.re) < 1e-10) ? 0 : z.re;
+      const im = (Math.abs(z.im) < 1e-10) ? 0 : z.im;
+      if(im === 0){
+        return `閉ループ極${idx+1}: ${re.toFixed(4)}`;
+      }else{
+        const sign = (im>=0) ? "+" : "−";
+        return `閉ループ極${idx+1}: ${re.toFixed(4)} ${sign} ${Math.abs(im).toFixed(4)}j`;
+      }
+    });
+
+  let note = "";
+  if(plant === "delay"){
+    note = "<div class='smallnote'>※ むだ時間系は Padé 1次近似で有限個の極として表示</div>";
+  }
+
+  document.getElementById("poleDisplay").innerHTML =
+    parts.join("<br/>") + note;
+}
+
+    function fitCanvasToCSSSize(cnv){
+      const dpr = window.devicePixelRatio || 1;
+      const rect = cnv.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width  * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (cnv.width !== w || cnv.height !== h) {
+        cnv.width = w;
+        cnv.height = h;
+      }
+      const c = cnv.getContext("2d");
+      // 描画座標系をCSSピクセル基準に戻す
+      c.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+    function resizeCanvases(){
+      fitCanvasToCSSSize(document.getElementById("graph"));
+    }
+
+    window.addEventListener("resize", () => {
+      resizeCanvases();
+      updateAll();
+    });
+
+    function referenceForType(type, t){
+  if(type==="step") return (t > 0.5) ? 1 : 0;
+  if(type==="sine") return Math.sin(2*Math.PI*1.0*t);
+  if(type==="square") return Math.sign(Math.sin(2*Math.PI*1.0*t));
+  if(type==="trapezoid"){
+    const tau = t % 2.0;
+    if(tau < 0.5) return 2*tau;
+    if(tau < 1.0) return 1;
+    if(tau < 1.5) return 3 - 2*tau;
+    return 0;
+  }
+  return 0;
+}
+
+function drawAllRefMini(){
+  const minis = document.querySelectorAll(".ref-mini");
+  minis.forEach(cnv=>{
+    const type = cnv.dataset.wave;
+    const c = cnv.getContext("2d");
+    c.clearRect(0,0,cnv.width,cnv.height);
+
+    const w = cnv.width, h = cnv.height;
+    const tMax = 2.0;
+    const pMin = -1.2, pMax = 1.2;
+
+    const sx = t => (t/tMax)*w;
+    const sy = y => h - (y - pMin)/(pMax - pMin)*h;
+
+    // 軸
+    c.strokeStyle = "#000";
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(0, sy(0));
+    c.lineTo(w, sy(0));
+    c.stroke();
+
+    // 波形
+    c.strokeStyle = "blue";
+    c.lineWidth = 2;
+    c.beginPath();
+    for(let t=0; t<=tMax+1e-9; t+=0.01){
+      const y = referenceForType(type, t);
+      const x = sx(t);
+      const yy = sy(y);
+      if(t===0) c.moveTo(x,yy);
+      else c.lineTo(x,yy);
+    }
+    c.stroke();
+  });
+}
+
+/* =============================
+   全更新
+============================= */
+function updateAll(){
+  resizeCanvases();
+  drawAllRefMini();  // ★4つの波形を常時表示
+  const data = simulate();
+  drawGraph(data);
+  updateTransferFunctions();
+  if(window.MathJax && MathJax.typesetPromise){
+  MathJax.typesetPromise();
+}
+}
+
+/* 初期描画 */
+updateAll();
+</script>
+</body>
+</html>
